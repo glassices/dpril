@@ -124,6 +124,13 @@ let rec mk_term bvars bod =
     [] -> bod
   | h::t -> mk_abs(h,mk_term t bod);;
 
+let safe_index x =
+  let rec ind n l =
+    match l with
+      [] -> -1
+    | (h::t) -> if Pervasives.compare x h = 0 then n else ind (n + 1) t in
+  ind 0;;
+
 (* get the index of bvar, -1 if not bounded
  * find from the tail, e.g.
  * bindex x [x;x;x] = 2
@@ -170,15 +177,22 @@ let rec sariant s avoid =
   if mem s avoid then sariant (s ^ "'") avoid
   else s;;
 
-(* expand a term to its long eta form
+(* expand a term to its long eta form with de bruijn index w1,w2,...
+ * NOTE that w* is only preserved for this usage, tm should have have w*
+ * as free variables
+ * NOTE tm might have w* has bound variables
  *)
 let eta_expand tm =
-  let bvars,bod = get_bound tm in
-  let hym,args = strip_comb bod in
-  let fvnames = map name_of (frees bod) in
-  let tyl,_ = dest_fun (type_of bod) in
-  let extra = List.mapi (fun i ty -> mk_var(sariant ("u" ^ (string_of_int (i+1))) fvnames,ty)) tyl in
-  let tm' = mk_term (bvars @ extra) (mk_lcomb hym (args @ extra)) in
-  (* TODO delete this assert in the future *)
-  if Pervasives.compare (eta_term tm') tm <> 0 then failwith "eta_expand"
-  else tm';;
+  let rec work pos tm =
+    match tm with
+      Abs(bvar,bod) -> let v = mk_var("w" ^ (string_of_int pos),type_of bvar) in
+                       mk_abs(v,work (pos+1) (vsubst [v,bvar] bod))
+    | _ ->  let tyl,_ = dest_fun (type_of tm) in
+           let extra = List.mapi (fun i ty -> mk_var("w" ^ (string_of_int (pos+i)),ty)) tyl in
+           mk_term extra (mk_lcomb tm extra) in
+
+  let tm' = work 1 tm in
+  if alphaorder (eta_term tm') (eta_term tm) <> 0 then (
+    print_endline ((ss_term tm) ^ "\t" ^ (ss_term tm'));
+    failwith "eta_expand"
+  ) else tm';;

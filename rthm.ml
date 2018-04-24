@@ -72,8 +72,14 @@ module Rthm : Rthm_kernel = struct
     Rhythm(asl,c,[],[],fun ins -> conv_thm beta_eta_conv (inst_thm ins th))
 
   let distill (asl,c,pairs,rsl,invoke) =
-    if hol_quick_check pairs rsl then Rhythm(asl,c,pairs,rsl,invoke)
-    else failwith "distill"
+    try let pairs,rsl,ins1 = init_data [] [] pairs rsl in
+        let pairs,rsl,ins2 = simplify [] [] pairs rsl in
+        let ins = merge_ins ins1 ins2 in
+        Rhythm(map (beta_eta_term o (inst_term ins)) asl,
+               beta_eta_term (inst_term ins c),
+               pairs,rsl,
+               fun ins' -> invoke (merge_ins ins ins'))
+    with Failure s when s = "init_data" || s = "simplify" -> failwith "distill"
 
   let req_mp (Rhythm(asl1,c1,pairs1,rsl1,invoke1)) (Rhythm(asl2,c2,pairs2,rsl2,invoke2)) =
     let v = mk_var(new_fvar(),bool_ty) in
@@ -131,7 +137,7 @@ module Rthm : Rthm_kernel = struct
 
   (* Higher-order semi-matching
    * I guess this procedure might be decidable
-   * NOTE: preserved names of free vars: xx*, mc*, z* (inside unification)
+   * NOTE: preserved names of free vars: xx*, mc*, z* (inside unification), w* (De Brujin names for expand_eta)
    *       preserved names of free typevars: C*, Z* (inside unification)
    *)
   let rmatch (Rhythm(asl,c,pairs,rsl,invoke)) (asl',c') =
@@ -142,11 +148,12 @@ module Rthm : Rthm_kernel = struct
       match csl with
         h::t -> (match csl' with
                    h'::t' -> let ins = work t asl' ((h,h')::pairs) in
-                             if ins = None then work csl t' pairs else ins 
-                 | [] -> None
+                             if ins = [] then work csl t' pairs else ins 
+                 | [] -> []
                 )
       | [] -> hol_unify const_ty const_var pairs rsl in
-    let ins = work asl asl' ((c,c')::pairs) in
+    let insl = work asl asl' ((c,c')::pairs) in
+    let ins = if insl <> [] then Some(hd insl) else None in
     match ins with
       Some(ins) -> ins,invoke ins
     | None -> failwith "rmatch"

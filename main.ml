@@ -8,6 +8,8 @@ let t_def() = mk_rthm(T_DEF);;
 
 let and_def() = mk_rthm(AND_DEF);;
 
+let hrth = ref (mk_rthm(T_DEF));;
+
 let lsym() = 
   reset_rcount();
   let r0 = mk_rthm(REFL `x:A`) in
@@ -47,6 +49,21 @@ let ltruth() =
   let r6 = req_mp r4 r5 in
   r6,rmatch r6 ([],`T`);;
 
+let land_elim() =
+  reset_rcount();
+  let r5 = rmk_comb (refl()) (mk_rthm(T_DEF)) in
+  let r6 = req_mp r5 (refl()) in
+  let r7 = req_mp r6 (refl()) in
+  let r93 = rmk_comb (mk_rthm(AND_DEF)) (refl()) in
+  let r100 = rmk_comb r93 (refl()) in
+  let r107 = req_mp r100 (assume()) in
+  let r109 = rmk_comb r107 (refl()) in
+  let r136 = rmk_comb (refl()) r109 in
+  let r137 = rmk_comb r136 (refl()) in
+  let r138 = req_mp r137 (refl()) in
+  let r139 = req_mp r138 r7 in
+  r139,rmatch r139 ([`p /\ q`],`p:bool`);;
+
 let land_intro() =
   reset_rcount();
   let r7() =
@@ -71,7 +88,7 @@ let land_intro() =
   let r87 = rmk_comb (mk_rthm(REFL `x:A`)) r76 in
   let r88 = rmk_comb r87 (mk_rthm(REFL `x:A`)) in
   let r89 = req_mp r88 (mk_rthm(REFL `x:A`)) in
-  let r90 = req_mp r89 r71 in
+  let r90 = req_mp r89 (rabs r71) in
   r90,rmatch r90 ([`p:bool`;`q:bool`],`p /\ q`);;
 
 
@@ -87,6 +104,7 @@ let search goal axioms max_dep =
       (*
       try (print_endline (string_of_rthm rth); let _,th = rmatch rth goal in Some(th))
       *)
+      hrth := rth;
       try let _,th = rmatch rth goal in Some(th)
       with Failure "rmatch" -> None
     else (
@@ -170,13 +188,12 @@ let falsify goal axioms max_dep =
         | [] -> try let pairs,rsl,_ = simplify const_ty const_var pairs rsl in
                     let fvars = freesl (let tmp1,tmp2 = unzip pairs in tmp1 @ tmp2) in
                     let max_ord = itlist (fun tm x -> max (ord_of_term tm) x) fvars 0 in
-                    if max_ord >= 3 then (
-                      valid := !valid + 1;
-                      Printf.fprintf oc "count:%d\tord:%d\n%!" !valid max_ord;
-                      List.iter (fun (u,v) -> Printf.fprintf oc "0\t%s\t%s\n%!" (ss_term u) (ss_term v)) pairs;
-                      List.iter (fun (u,v) -> Printf.fprintf oc "1\t%s\t%s\n%!" (ss_term u) v) rsl;
-                      Printf.fprintf oc "\n%!"
-                    ) else ()
+                    valid := !valid + 1;
+                    Printf.fprintf oc "count:%d\tord:%d\n%!" !valid max_ord;
+                    Printf.fprintf oc "%s\n%!" (string_of_rthm rth);
+                    List.iter (fun (u,v) -> Printf.fprintf oc "0\t%s\t%s\n%!" (ss_term u) (ss_term v)) pairs;
+                    List.iter (fun (u,v) -> Printf.fprintf oc "1\t%s\t%s\n%!" (ss_term u) v) rsl;
+                    Printf.fprintf oc "\n%!"
                 with Failure "simplify" -> () in
       work asl asl' ((c,c')::pairs)
     else (
@@ -229,6 +246,76 @@ let falsify goal axioms max_dep =
   work max_dep [];
   close_out oc;;
 
+(* no aim, just try different trees *)
+let doit axioms max_dep least_abs =
+  let valid = ref 0 in
+  let count = ref 0 in
+
+  let rec work n_rem n_abs lst : unit =
+    if n_rem-n_abs+1 < (length lst) then ()
+    else if n_rem = 0 then
+      let rth = hd lst in
+      count := !count + 1;
+      if !count mod 10000 = 0 then printf "%d\n%!" !count else ();
+      let s = string_of_rthm rth in
+      try let lt = String.index s '[' in
+          let rt = String.index s ']' in
+          let ss = String.sub s lt (rt-lt+1) in
+          if exists (fun i -> (String.sub ss i 2) = "mc") (0--((String.length ss)-2)) then
+            print_endline s
+          else ()
+      with Not_found -> ()
+    else (
+      (* add new axioms *)
+      let rec traverse axioms =
+        match axioms with
+          h::t -> work n_rem n_abs ((h())::lst); traverse t
+        | [] -> () in
+      traverse axioms;
+      (* eq_mp *)
+      if length lst >= 2 then
+        let h1,h2,t = hd lst,hd (tl lst),tl (tl lst) in
+        try let rth = req_mp h2 h1 in
+            work (n_rem-1) n_abs (rth::t)
+        with Failure "distill" -> ()
+      else ();
+      (* mk_comb *)
+      (*
+      if length lst >= 2 then
+        let h1,h2,t = hd lst,hd (tl lst),tl (tl lst) in
+        try let rth = rmk_comb h2 h1 in
+            work (n_rem-1) n_abs (rth::t)
+        with Failure "distill" -> ()
+      else ();
+      *)
+      (* trans *)
+      if length lst >= 2 then
+        let h1,h2,t = hd lst,hd (tl lst),tl (tl lst) in
+        try let rth = rtrans h2 h1 in
+            work (n_rem-1) n_abs (rth::t)
+        with Failure "distill" -> ()
+      else ();
+      (* abs *)
+      if length lst >= 1 then
+        let h,t = hd lst,tl lst in
+        try let rth = rabs h in
+            work (n_rem-1) (n_abs-1) (rth::t)
+        with Failure "distill" -> ()
+      else ();
+      (* deduct *)
+      if length lst >= 2 then
+        let h1,h2,t = hd lst,hd (tl lst),tl (tl lst) in
+        let n2 = length (rhyp h2) and n1 = length (rhyp h1) in
+        do_list (fun v -> let v2 = (lsr) v n1 and v1 = (land) v (((lsl) 1 n1)-1) in
+                          try let rth = rdeduct h2 h1 v2 v1 in
+                              work (n_rem-1) n_abs (rth::t)
+                          with Failure "distill" -> ())
+                (0--(((lsl) 1 (n2+n1))-1))
+      else ()
+    ) in
+
+  work max_dep least_abs [];;
+
 (* limit=20, minimum n = 3 *)
 let task1 n =
   let axioms = [refl;assume;(fun () -> mk_rthm(T_DEF))] in
@@ -269,3 +356,6 @@ let task7 n =
 let unify1() =
   hol_unify [] ["p"] [`(x4:bool->bool) mc`,`(x5:bool->bool) mc`;`(x3:(bool->bool)->bool) x4`,concl T_DEF;`(x3:(bool->bool)->bool) x5`,`p:bool`]
   [`(x4:bool->bool)`,"mc";`(x5:bool->bool)`,"mc"];;
+
+let unify2() =
+  hol_unify [] [] [`(x:q->bool) (y:q)`,`(z:e)=z`;`(x:q->bool) (y:q)`,`T`] [];;
